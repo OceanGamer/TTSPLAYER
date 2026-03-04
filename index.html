@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Reproductor por gestos</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      -webkit-overflow-scrolling: touch;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      background: #0a0a0a;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #fff;
+    }
+    body {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      /* Safe area for iPhone notch */
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    .zone {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 33.333%;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .zone-left {
+      left: 0;
+      background: rgba(30, 40, 60, 0.4);
+    }
+    .zone-center {
+      left: 33.333%;
+      background: rgba(40, 35, 50, 0.4);
+    }
+    .zone-right {
+      left: 66.666%;
+      background: rgba(35, 45, 55, 0.4);
+    }
+    .hint {
+      position: absolute;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.85rem;
+      opacity: 0.5;
+      pointer-events: none;
+      text-align: center;
+      padding: 0 1rem;
+    }
+    .track-info {
+      position: absolute;
+      top: env(safe-area-inset-top, 1rem);
+      left: 1rem;
+      right: 1rem;
+      text-align: center;
+      font-size: 0.9rem;
+      opacity: 0.8;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="zone-left" class="zone zone-left" data-zone="left"></div>
+  <div id="zone-center" class="zone zone-center" data-zone="center"></div>
+  <div id="zone-right" class="zone zone-right" data-zone="right"></div>
+  <p class="track-info" id="track-info">Toca para empezar</p>
+  <p class="hint" id="hint">Izq: -5s / 2 toques: anterior · Centro: pausa · Der: +5s / 2 toques: siguiente</p>
+
+  <audio id="audio" preload="auto" playsinline webkit-playsinline></audio>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var AUDIO_LIST = [];
+      for (var i = 1; i <= 29; i++) {
+        AUDIO_LIST.push('AUDIOS/' + i + '.wav');
+      }
+
+      var ZONE_LEFT = 'left';
+      var ZONE_CENTER = 'center';
+      var ZONE_RIGHT = 'right';
+      var SINGLE_TAP_DELAY_MS = 320;
+      var DOUBLE_TAP_MAX_MS = 400;
+
+      var audio = document.getElementById('audio');
+      var trackInfo = document.getElementById('track-info');
+      var currentIndex = 0;
+      var pendingSingleTap = null;
+      var lastTap = { zone: null, time: 0 };
+
+      var audioCtx = null;
+      function getAudioCtx() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        return audioCtx;
+      }
+      function beep(count, short) {
+        try {
+          var ctx = getAudioCtx();
+          if (ctx.state === 'suspended') ctx.resume();
+          var duration = short ? 0.08 : 0.25;
+          var gap = 0.1;
+          var playOne = function (n) {
+            var osc = ctx.createOscillator();
+            var g = ctx.createGain();
+            osc.connect(g);
+            g.connect(ctx.destination);
+            osc.frequency.value = 880;
+            osc.type = 'sine';
+            g.gain.setValueAtTime(0.55, ctx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + duration);
+            if (n < count - 1) setTimeout(function () { playOne(n + 1); }, (duration + gap) * 1000);
+          };
+          playOne(0);
+        } catch (e) {}
+      }
+      function beepPause() { beep(1, true); }
+      function beepSeek() { beep(2, true); }
+      function beepTrackChange() { beep(1, false); }
+
+      function getZoneFromElement(el) {
+        if (!el) return null;
+        var z = el.getAttribute && el.getAttribute('data-zone');
+        if (z) return z;
+        return getZoneFromElement(el.parentNode);
+      }
+
+      function getZoneFromPosition(x) {
+        var w = window.innerWidth;
+        if (x < w * 0.33) return ZONE_LEFT;
+        if (x < w * 0.66) return ZONE_CENTER;
+        return ZONE_RIGHT;
+      }
+
+      function handleSingleTap(zone) {
+        if (zone === ZONE_LEFT) {
+          audio.currentTime = Math.max(0, audio.currentTime - 5);
+          trackInfo.textContent = '-5 s';
+          beepSeek();
+          setTimeout(function () { updateTrackLabel(); }, 800);
+        } else if (zone === ZONE_RIGHT) {
+          audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5);
+          trackInfo.textContent = '+5 s';
+          beepSeek();
+          setTimeout(function () { updateTrackLabel(); }, 800);
+        } else if (zone === ZONE_CENTER) {
+          if (audio.paused) {
+            audio.play();
+            trackInfo.textContent = 'Reproduciendo';
+          } else {
+            audio.pause();
+            trackInfo.textContent = 'Pausado';
+            beepPause();
+          }
+          setTimeout(function () { updateTrackLabel(); }, 800);
+        }
+      }
+
+      function handleDoubleTap(zone) {
+        beepTrackChange();
+        if (zone === ZONE_LEFT) {
+          currentIndex = (currentIndex - 1 + AUDIO_LIST.length) % AUDIO_LIST.length;
+          loadAndPlay(currentIndex);
+          trackInfo.textContent = 'Anterior: ' + (currentIndex + 1) + ' / ' + AUDIO_LIST.length;
+        } else if (zone === ZONE_RIGHT) {
+          currentIndex = (currentIndex + 1) % AUDIO_LIST.length;
+          loadAndPlay(currentIndex);
+          trackInfo.textContent = 'Siguiente: ' + (currentIndex + 1) + ' / ' + AUDIO_LIST.length;
+        }
+        setTimeout(function () { updateTrackLabel(); }, 800);
+      }
+
+      function loadAndPlay(index) {
+        var src = AUDIO_LIST[index];
+        audio.src = src;
+        audio.load();
+        audio.play().catch(function () {});
+      }
+
+      function updateTrackLabel() {
+        trackInfo.textContent = (currentIndex + 1) + ' / ' + AUDIO_LIST.length;
+      }
+
+      function onTap(clientX, zoneFromElement) {
+        var zone = zoneFromElement || getZoneFromPosition(clientX);
+        var now = Date.now();
+        var isDouble = (lastTap.zone === zone && (now - lastTap.time) < DOUBLE_TAP_MAX_MS);
+
+        if (pendingSingleTap) {
+          clearTimeout(pendingSingleTap);
+          pendingSingleTap = null;
+        }
+
+        if (isDouble) {
+          lastTap.zone = null;
+          lastTap.time = 0;
+          handleDoubleTap(zone);
+          return;
+        }
+
+        lastTap.zone = zone;
+        lastTap.time = now;
+        pendingSingleTap = setTimeout(function () {
+          pendingSingleTap = null;
+          handleSingleTap(zone);
+        }, SINGLE_TAP_DELAY_MS);
+      }
+
+      function handleTouch(e) {
+        e.preventDefault();
+        if (e.type === 'touchend' && e.changedTouches && e.changedTouches.length) {
+          var t = e.changedTouches[0];
+          var zone = getZoneFromElement(e.target);
+          if (!zone) zone = getZoneFromPosition(t.clientX);
+          onTap(t.clientX, zone);
+        }
+      }
+
+      function handleClick(e) {
+        e.preventDefault();
+        var zone = getZoneFromElement(e.target);
+        if (!zone) zone = getZoneFromPosition(e.clientX);
+        onTap(e.clientX, zone);
+      }
+
+      document.addEventListener('touchstart', function (e) { e.preventDefault(); }, { passive: false });
+      document.addEventListener('touchend', handleTouch, { passive: false });
+      document.addEventListener('click', handleClick, true);
+
+      audio.addEventListener('ended', function () {
+        currentIndex = (currentIndex + 1) % AUDIO_LIST.length;
+        loadAndPlay(currentIndex);
+        updateTrackLabel();
+      });
+
+      audio.addEventListener('error', function () {
+        trackInfo.textContent = 'Error al cargar ' + (currentIndex + 1);
+      });
+
+      updateTrackLabel();
+      audio.src = AUDIO_LIST[0];
+      audio.load();
+    })();
+  </script>
+</body>
+</html>
