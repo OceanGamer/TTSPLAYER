@@ -113,7 +113,7 @@
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         return audioCtx;
       }
-      function beep(count, short) {
+      function beep(count, short, frequency) {
         try {
           var ctx = getAudioCtx();
           if (ctx.state === 'suspended') ctx.resume();
@@ -124,7 +124,7 @@
             var g = ctx.createGain();
             osc.connect(g);
             g.connect(ctx.destination);
-            osc.frequency.value = 880;
+            osc.frequency.value = frequency || 880;
             osc.type = 'sine';
             g.gain.setValueAtTime(0.55, ctx.currentTime);
             g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
@@ -135,9 +135,13 @@
           playOne(0);
         } catch (e) {}
       }
-      function beepPause() { beep(1, true); }
-      function beepSeek() { beep(2, true); }
-      function beepTrackChange() { beep(1, false); }
+      function beepPause() { beep(1, true, 880); }
+      function beepSeek() { beep(2, true, 880); }
+      function beepTrackChange() { beep(1, false, 880); }
+      function beepEndTrack() { beep(3, true, 880); }
+      function beepLoadingStart() { beep(3, true, 1600); }
+      function beepLoadingOk() { beep(1, true, 1600); }
+      function beepError() { beep(2, false, 420); }
 
       function getZoneFromElement(el) {
         if (!el) return null;
@@ -193,6 +197,8 @@
 
       function loadAndPlay(index) {
         var src = AUDIO_LIST[index];
+        trackInfo.textContent = 'Cargando ' + (index + 1) + ' / ' + AUDIO_LIST.length;
+        beepLoadingStart();
         audio.src = src;
         audio.load();
         audio.play().catch(function () {});
@@ -249,13 +255,20 @@
       document.addEventListener('click', handleClick, true);
 
       audio.addEventListener('ended', function () {
-        currentIndex = (currentIndex + 1) % AUDIO_LIST.length;
-        loadAndPlay(currentIndex);
+        beepEndTrack();
+        audio.currentTime = 0;
+        audio.play().catch(function () {});
+        updateTrackLabel();
+      });
+
+      audio.addEventListener('canplay', function () {
+        beepLoadingOk();
         updateTrackLabel();
       });
 
       audio.addEventListener('error', function () {
         trackInfo.textContent = 'Error al cargar ' + (currentIndex + 1);
+        beepError();
       });
 
       updateTrackLabel();
